@@ -12,7 +12,7 @@
 
 <br/>
 
-<img src="assets/vectra_hero.png" alt="Vectra Terminal Intelligence Banner" width="850"/>
+<img src="assets/vectra_live_terminal.png" alt="Vectra Live Terminal Interface" width="950"/>
 
 <br/>
 
@@ -38,7 +38,7 @@
 ## 📸 Terminal Interface Preview
 
 <div align="center">
-  <img src="assets/terminal_preview.png" alt="Vectra Interactive Red Cyberpunk Terminal" width="780"/>
+  <img src="assets/vectra_live_terminal.png" alt="Vectra Interactive Red Cyberpunk Terminal" width="950"/>
 </div>
 
 ---
@@ -181,38 +181,6 @@ docker compose up -d vectra-api
 ---
 
 ## 🏛️ Architecture & Offline Storage
-
-```
-                             ┌───────────────────────────────────┐
-                             │  Official CVEProject / GTFOBins   │
-                             │  - 386,000+ Raw JSON 5.0 Records  │
-                             │  - 3,600+ Unix Exploitation YAMLs │
-                             └─────────────────┬─────────────────┘
-                                               │
-                                               ▼
-                             ┌───────────────────────────────────┐
-                             │     Vectra Stream Parser & Ingest │
-                             │  - In-Memory Zip Stream Parsing   │
-                             │  - Zero Disk Waste Ingestion      │
-                             └─────────────────┬─────────────────┘
-                                               │
-                                               ▼
-                             ┌───────────────────────────────────┐
-                             │    Local SQLite FTS5 Database     │
-                             │  - ~/.local/share/vectra/cves.db  │
-                             │  - BM25 Porter-Stemmed FTS Index  │
-                             │  - Sub-Millisecond Query Latency  │
-                             └─────────────────┬─────────────────┘
-                                               │
-                     ┌─────────────────────────┴─────────────────────────┐
-                     ▼                                                   ▼
-      ┌─────────────────────────────┐                     ┌─────────────────────────────┐
-      │   Vectra Interactive REPL   │                     │      FastAPI REST Server    │
-      │   - Cyberpunk Red Terminal  │                     │   - GET /api/search         │
-      │   - Instant Fast Shortcuts  │                     │   - GET /api/cve/{id}       │
-      │   - Responsive Code Blocks  │                     │   - GET /api/gtfo           │
-      └─────────────────────────────┘                     └─────────────────────────────┘
-```
 
 - **Local Storage Path**: `~/.local/share/vectra/cves.db`
 - **Environment Variable**: `VECTRA_DATA_DIR=/custom/path`
