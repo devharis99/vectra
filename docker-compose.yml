@@ -1,0 +1,30 @@
+services:
+  vectra-cli:
+    build: .
+    image: vectra:latest
+    container_name: vectra-cli
+    stdin_open: true
+    tty: true
+    volumes:
+      - vectra_data:/data
+    environment:
+      - VECTRA_DATA_DIR=/data
+    entrypoint: ["vectra"]
+    command: ["interactive"]
+
+  vectra-api:
+    build: .
+    image: vectra:latest
+    container_name: vectra-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - vectra_data:/data
+    environment:
+      - VECTRA_DATA_DIR=/data
+    entrypoint: ["python", "-m", "uvicorn", "vectra.server:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+
+volumes:
+  vectra_data:
+    driver: local

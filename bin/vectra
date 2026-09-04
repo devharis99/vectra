@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+PROJECT_DIR="/home/abrham/.gemini/antigravity/scratch/cve-search-engine"
+if [ -f "$PROJECT_DIR/.venv/bin/python3" ]; then
+    PYTHON="$PROJECT_DIR/.venv/bin/python3"
+else
+    PYTHON="python3"
+fi
+exec "$PYTHON" -m vectra.cli "$@"
