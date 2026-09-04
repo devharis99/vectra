@@ -10,11 +10,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-<br/>
 
-<img src="assets/vectra_live_terminal.png" alt="Vectra Live Terminal Interface" width="950"/>
-
-<br/>
 
 ```
 ██▒   █▓▓█████  ▄████▄  ████████▓ ██▀███   ▄▄▄      
