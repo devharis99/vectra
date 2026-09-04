@@ -1,40 +1,34 @@
+import re
 import yaml
-import sqlite3
 import zipfile
-import io
+import sqlite3
 import urllib.request
-from pathlib import Path
 from typing import List, Dict, Any, Optional
-from vectra.config import GTFOBINS_REPO_ZIP, DB_PATH
-from vectra.db import get_db_connection, save_gtfobins_batch, init_db
+from pathlib import Path
+from vectra.config import GTFOBINS_REPO_ZIP, DEFAULT_DATA_DIR
+from vectra.db import get_db_connection, init_db, save_gtfobins_batch
 
 def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
-    """Parse all GTFOBins recipes from zip and resolve inheritance/contexts."""
+    """Parse all GTFOBins markdown/yaml recipe files from the GitHub repository zip archive."""
+    all_entries = []
     raw_bins = {}
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+
+    import io
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as z:
         for filename in z.namelist():
-            if "/_gtfobins/" in filename and not filename.endswith("/"):
-                binary_name = filename.split("/")[-1].replace(".md", "")
-                if not binary_name:
-                    continue
+            if filename.endswith(".md") and "_gtfobins/" in filename:
+                base_name = Path(filename).stem
                 try:
-                    yaml_text = z.read(filename).decode("utf-8", errors="ignore")
-                    content = yaml_text.strip()
-                    if content.startswith("---"):
-                        parts = content.split("---")
-                        for p in parts:
-                            if "functions:" in p:
-                                content = p
-                                break
-                    data = yaml.safe_load(content)
-                    if isinstance(data, dict) and "functions" in data and isinstance(data["functions"], dict):
-                        raw_bins[binary_name] = data["functions"]
+                    content = z.read(filename).decode("utf-8")
+                    match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL | re.MULTILINE)
+                    if match:
+                        yaml_text = match.group(1)
+                        data = yaml.safe_load(yaml_text)
+                        if isinstance(data, dict) and "functions" in data:
+                            raw_bins[base_name] = data["functions"]
                 except Exception:
                     continue
 
-    all_entries = []
-
-    # Second pass: resolve entries and inheritance
     for binary_name, functions in raw_bins.items():
         url = f"https://gtfobins.github.io/gtfobins/{binary_name}/"
         for func_name, code_blocks in functions.items():
@@ -122,10 +116,11 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
                                                 "url": url,
                                             })
 
-    # Deduplicate entries
+    # Deduplicate entries strictly
     unique_map = {}
     for e in all_entries:
-        key = (e["binary"], e["function"], e["code"])
+        code_norm = " ".join(e["code"].split())
+        key = (e["binary"].lower(), e["function"].lower(), code_norm)
         if key not in unique_map:
             unique_map[key] = e
 
@@ -169,7 +164,7 @@ def search_gtfobins(
     conn: Optional[sqlite3.Connection] = None,
     limit: int = 50
 ) -> List[Dict[str, Any]]:
-    """Search GTFOBins by binary name, function (sudo, suid, shell, etc.), or code keyword."""
+    """Search GTFOBins by binary name, function (sudo, suid, shell, etc.), with strict zero-duplicate guarantee."""
     close_conn = False
     if conn is None:
         conn = get_db_connection()
@@ -180,13 +175,14 @@ def search_gtfobins(
 
     if query:
         clean_q = query.strip().lower()
-        # First check if there's an exact or prefix match on binary column
-        exact_bin_check = conn.execute("SELECT COUNT(*) as c FROM gtfobins WHERE LOWER(binary) = ? OR LOWER(binary) LIKE ?", (clean_q, f"{clean_q}%")).fetchone()["c"]
+        exact_bin_check = conn.execute(
+            "SELECT COUNT(*) as c FROM gtfobins WHERE LOWER(binary) = ? OR LOWER(binary) LIKE ?",
+            (clean_q, f"%{clean_q}%")
+        ).fetchone()["c"]
         if exact_bin_check > 0:
             sql_parts.append("AND (LOWER(binary) = ? OR LOWER(binary) LIKE ?)")
-            params.extend([clean_q, f"{clean_q}%"])
+            params.extend([clean_q, f"%{clean_q}%"])
         else:
-            # Fallback to full-text search across description/code
             sql_parts.append("AND id IN (SELECT rowid FROM gtfobins_fts WHERE gtfobins_fts MATCH ?)")
             params.append(f'"{clean_q}"*')
 
@@ -196,16 +192,30 @@ def search_gtfobins(
         params.append(clean_f)
 
     sql_parts.append("ORDER BY binary ASC, function ASC LIMIT ?")
-    params.append(limit)
+    params.append(limit * 3)
 
     query_str = " ".join(sql_parts)
     rows = conn.execute(query_str, params).fetchall()
-    results = [dict(r) for r in rows]
+    
+    # Strict deduplication: ensure no repeated command payload is returned
+    seen = set()
+    deduped_results = []
+    for r in rows:
+        row_dict = dict(r)
+        code_norm = " ".join(row_dict["code"].split())
+        # Deduplicate strictly by binary and command payload
+        dedup_key = (row_dict["binary"].lower(), code_norm)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        deduped_results.append(row_dict)
+        if len(deduped_results) >= limit:
+            break
 
     if close_conn:
         conn.close()
 
-    return results
+    return deduped_results
 
 def list_gtfobins_functions(conn: Optional[sqlite3.Connection] = None) -> List[str]:
     """Get all unique GTFOBins function types."""

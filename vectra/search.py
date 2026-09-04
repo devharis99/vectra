@@ -1,30 +1,27 @@
-import sqlite3
 import re
 import json
+import sqlite3
 from typing import List, Dict, Any, Optional, Tuple
-from vectra.config import DB_PATH
 from vectra.db import get_db_connection
 from vectra.vuln_classifier import normalize_vuln_type
 
-def clean_fts_query(text: str) -> str:
-    """Sanitize and format query string for SQLite FTS5 matching."""
-    # Remove special FTS5 operators to prevent syntax errors
-    clean = re.sub(r'["\'\*\+\^\:\(\)\{\}\[\]\-\~]', ' ', text)
-    tokens = [t.strip() for t in clean.split() if t.strip()]
-    if not tokens:
-        return ""
-    # Prefix match on tokens
-    return " ".join([f'"{t}"*' if not t.isdigit() else f'"{t}"' for t in tokens])
-
-def extract_service_and_version(query: str) -> Tuple[str, Optional[str]]:
-    """Detect if the query string contains a software service name and version number."""
-    # Matches patterns like 'apache 2.4.49', 'openssh 8.2p1', 'sudo 1.8.31', 'nginx 1.18.0'
-    m = re.search(r'\b([a-zA-Z\-_]+)\s+([vV]?\d+(\.\d+)+[a-zA-Z0-9_\-\.]*)\b', query)
+def extract_service_and_version(query_str: str) -> Tuple[str, Optional[str]]:
+    """Extract product/service name and potential version number from query string."""
+    m = re.search(r"^(.*?)\s+v?([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9_\-\.]+)?)$", query_str.strip())
     if m:
-        service = m.group(1).strip()
-        version = m.group(2).strip().lstrip("vV")
-        return service, version
-    return query, None
+        return m.group(1).strip(), m.group(2).strip()
+    return query_str.strip(), None
+
+def clean_fts_query(user_query: str) -> str:
+    """Sanitize user query for SQLite FTS5 syntax, avoiding syntax errors on punctuation."""
+    tokens = re.findall(r"[a-zA-Z0-9_\.\-]+", user_query)
+    clean_tokens = []
+    for t in tokens:
+        if re.match(r"^[0-9]+(\.[0-9]+)+$", t):
+            clean_tokens.append(f'"{t}"')
+        else:
+            clean_tokens.append(f'"{t}"*')
+    return " AND ".join(clean_tokens) if clean_tokens else ""
 
 def search_cves(
     query: str = "",
@@ -40,7 +37,7 @@ def search_cves(
     offset: int = 0,
     conn: Optional[sqlite3.Connection] = None
 ) -> Dict[str, Any]:
-    """Execute a multi-criteria search over CVE records with FTS5 ranking and structured filters."""
+    """Execute multi-criteria full-text and structured search across CVE database with strict deduplication."""
     close_conn = False
     if conn is None:
         conn = get_db_connection()
@@ -52,15 +49,14 @@ def search_cves(
         if detected_ver:
             service = detected_service
             version = detected_ver
-            query = ""  # Filter using specific service and version criteria
+            query = ""
 
-    sql_conditions = ["c.state = 'PUBLISHED'"]
-    params: List[Any] = []
+    sql_conditions = ["1=1"]
+    params = []
     fts_clauses = []
 
     # 1. Full-text query on description/title
     if query:
-        # Check if query is an exact CVE-ID
         if re.match(r"^CVE-\d{4}-\d+$", query.strip(), re.I):
             sql_conditions.append("c.cve_id = ?")
             params.append(query.strip().upper())
@@ -81,7 +77,7 @@ def search_cves(
         sql_conditions.append("(c.affected_versions LIKE ? OR c.description LIKE ? OR c.title LIKE ?)")
         params.extend([f"%{ver_clean}%", f"%{ver_clean}%", f"%{ver_clean}%"])
 
-    # 4. Vulnerability type filtering (e.g. rce, privesc, sqli, xss)
+    # 4. Vulnerability type filtering
     if vuln_type:
         norm_type = normalize_vuln_type(vuln_type)
         sql_conditions.append("c.vuln_types LIKE ?")
@@ -114,7 +110,6 @@ def search_cves(
         sql_conditions.append("c.cwe_ids LIKE ?")
         params.append(f"%{cwe_clean}%")
 
-    # Build SQL statement
     where_clause = " AND ".join(sql_conditions)
     
     if fts_clauses:
@@ -127,9 +122,9 @@ def search_cves(
             ORDER BY c.cvss_v3_score DESC NULLS LAST, c.date_published DESC
             LIMIT ? OFFSET ?;
         """
-        exec_params = [fts_match_str] + params + [limit, offset]
+        exec_params = [fts_match_str] + params + [limit * 2, offset]
         count_query = f"""
-            SELECT COUNT(*) as total
+            SELECT COUNT(DISTINCT c.cve_id) as total
             FROM cves c
             JOIN cves_fts ON c.cve_id = cves_fts.cve_id
             WHERE cves_fts MATCH ? AND {where_clause};
@@ -143,17 +138,23 @@ def search_cves(
             ORDER BY c.cvss_v3_score DESC NULLS LAST, c.date_published DESC
             LIMIT ? OFFSET ?;
         """
-        exec_params = params + [limit, offset]
-        count_query = f"SELECT COUNT(*) as total FROM cves c WHERE {where_clause};"
+        exec_params = params + [limit * 2, offset]
+        count_query = f"SELECT COUNT(DISTINCT c.cve_id) as total FROM cves c WHERE {where_clause};"
         count_params = params
 
     total_count = conn.execute(count_query, count_params).fetchone()["total"]
     rows = conn.execute(base_query, exec_params).fetchall()
     
+    # Strict deduplication by cve_id
+    seen_cves = set()
     results = []
     for r in rows:
+        c_id = r["cve_id"]
+        if c_id in seen_cves:
+            continue
+        seen_cves.add(c_id)
+
         row_dict = dict(r)
-        # Parse JSON fields
         try:
             row_dict["references"] = json.loads(row_dict.get("references_json") or "[]")
         except Exception:
@@ -163,6 +164,8 @@ def search_cves(
         except Exception:
             row_dict["version_details"] = []
         results.append(row_dict)
+        if len(results) >= limit:
+            break
 
     if close_conn:
         conn.close()

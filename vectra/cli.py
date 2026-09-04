@@ -15,7 +15,7 @@ from vectra.db import init_db, get_db_connection
 from vectra.search import search_cves, get_cve_by_id, get_database_stats
 from vectra.gtfobins import search_gtfobins, download_and_sync_gtfobins, list_gtfobins_functions
 from vectra.downloader import fetch_latest_release_info, download_file_with_progress, ingest_cve_zip
-from vectra.exploit_guide import get_gtfo_guide, get_cve_exploit_guide
+from vectra.exploit_guide import analyze_command_payload, get_cve_exploit_guide
 
 console = Console()
 
@@ -205,13 +205,13 @@ def cmd_gtfo(args):
         f_name = r["function"]
         code_str = r.get("code", "")
 
-        guide = get_gtfo_guide(b_name, f_name, code_str)
+        guide = analyze_command_payload(b_name, f_name, code_str, r.get("description", ""))
         func_badge = f"[bold white on red] {f_name.upper()} [/bold white on red]"
-        bin_header = f"[bold bright_cyan]{b_name}[/bold bright_cyan]  {func_badge}  [dim]• {guide['service_name']}[/dim]"
+        bin_header = f"[bold bright_cyan]{b_name}[/bold bright_cyan]  {func_badge}  [dim]• {guide['technique_name']}[/dim]"
 
         body_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        body_table.add_row("[bold cyan]Tool / Service Name:[/bold cyan]", f"[bold white]{guide['service_name']}[/bold white]")
-        body_table.add_row("[bold cyan]Vulnerable Versions / Scope:[/bold cyan]", f"[bold yellow]{guide['versions']}[/bold yellow]")
+        body_table.add_row("[bold cyan]Technique / Name:[/bold cyan]", f"[bold white]{guide['technique_name']}[/bold white]")
+        body_table.add_row("[bold cyan]Version Scope / Constraints:[/bold cyan]", f"[bold yellow]{guide['version_scope']}[/bold yellow]")
         
         # Description / Mechanism
         exploit_desc = r.get("description")
