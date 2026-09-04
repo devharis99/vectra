@@ -19,3 +19,7 @@ dependencies = [
 [project.scripts]
 vectra = "vectra.cli:main"
 cve = "vectra.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vectra*"]
