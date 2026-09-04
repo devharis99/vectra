@@ -9,7 +9,7 @@ from rich.table import Table
 
 from vectra.search import search_cves, get_cve_by_id, get_database_stats
 from vectra.gtfobins import search_gtfobins, list_gtfobins_functions, download_and_sync_gtfobins
-from vectra.cli import print_cve_table, cmd_get, cmd_gtfo, cmd_stats
+from vectra.cli import print_cve_table, print_cve_card, cmd_get, cmd_gtfo, cmd_stats
 
 console = Console()
 
@@ -57,6 +57,8 @@ def get_completer():
             "--year": None,
             "--cwe": None,
             "--limit": None,
+            "--details": None,
+            "-d": None,
         },
         "s": None,
         "list": {
@@ -107,7 +109,7 @@ def show_help_panel():
     # CVE Search
     table.add_row(
         "search <query> / s <query>",
-        "Search CVEs by software, version, or keywords",
+        "Search CVEs by software, version, or keywords (with exploit guide)",
         "search apache 2.4.49"
     )
     table.add_row(
@@ -149,27 +151,27 @@ def show_help_panel():
     # GTFOBins
     table.add_row(
         "gtfo <binary> [type]",
-        "Lookup Unix bypass & exploitation payloads",
-        "gtfo find sudo"
+        "Lookup Unix bypass instructions, versions & exploit payloads",
+        "gtfo nmap sudo"
     )
     table.add_row(
         "sudo <binary>",
-        "Quick Sudo root privilege escalation payload",
-        "sudo vim"
+        "Sudo root privilege escalation with execution steps",
+        "sudo nmap"
     )
     table.add_row(
         "suid <binary>",
-        "Quick SUID root breakout payload",
+        "SUID root breakout payload with execution steps",
         "suid bash"
     )
     table.add_row(
         "shell <binary>",
-        "Payload to spawn an interactive shell",
+        "Payload to spawn an interactive shell with explanation",
         "shell find"
     )
     table.add_row(
         "rev <binary>",
-        "Payload for reverse shell connection",
+        "Payload for reverse shell connection with instructions",
         "rev nc"
     )
 
@@ -211,6 +213,7 @@ def handle_search_command(args_list, forced_type=None):
     parser.add_argument("--year", "-y", type=int, default=None)
     parser.add_argument("--cwe", default=None)
     parser.add_argument("--limit", "-n", type=int, default=20)
+    parser.add_argument("--details", "-d", action="store_true", default=False)
 
     try:
         parsed = parser.parse_args(args_list)
@@ -235,13 +238,25 @@ def handle_search_command(args_list, forced_type=None):
             limit=parsed.limit
         )
 
+    results = res["results"]
+    if not results:
+        console.print(f"[yellow]No CVEs found matching: {q_str or 'criteria'}[/yellow]")
+        return
+
     filter_desc = []
     if q_str: filter_desc.append(f"'{q_str}'")
     if vuln_type: filter_desc.append(f"type: {vuln_type}")
     if parsed.service: filter_desc.append(f"service: {parsed.service}")
     if parsed.version: filter_desc.append(f"version: {parsed.version}")
-    
-    print_cve_table(res["results"], res["total"], " ".join(filter_desc) or "all")
+    query_title = " ".join(filter_desc) or "all"
+
+    # If results <= 3 or user passed -d/--details, show full vulnerability intelligence cards
+    if parsed.details or len(results) <= 3:
+        console.print(f"\n[bold green]⚡ VECTRA Vulnerability Intelligence ({len(results)} matches for {query_title}):[/bold green]\n")
+        for r in results:
+            print_cve_card(r)
+    else:
+        print_cve_table(results, res["total"], query_title)
 
 def handle_list_command(args_list):
     sub = args_list[0].lower() if args_list else "all"

@@ -1,9 +1,9 @@
 import sys
 import argparse
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any, List
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
@@ -15,6 +15,7 @@ from vectra.db import init_db, get_db_connection
 from vectra.search import search_cves, get_cve_by_id, get_database_stats
 from vectra.gtfobins import search_gtfobins, download_and_sync_gtfobins, list_gtfobins_functions
 from vectra.downloader import fetch_latest_release_info, download_file_with_progress, ingest_cve_zip
+from vectra.exploit_guide import get_gtfo_guide, get_cve_exploit_guide
 
 console = Console()
 
@@ -45,6 +46,50 @@ def format_score_meter(score: Optional[float], severity: Optional[str]) -> str:
         meter_color = "green"
     
     return f"[{meter_color}]{'█' * filled}[dim]{'░' * empty}[/dim] {score:.1f}[/{meter_color}]"
+
+def print_cve_card(r: Dict[str, Any]):
+    """Print an enriched, detailed vulnerability card for a specific CVE."""
+    cve_id = r["cve_id"]
+    score = r.get("cvss_v3_score") or r.get("cvss_v2_score")
+    score_meter = format_score_meter(score, r.get("cvss_v3_severity"))
+    sev_style, sev_label = get_severity_style(r.get("cvss_v3_severity"), score)
+
+    service = r.get("affected_products") or r.get("affected_vendors") or "Not Specified"
+    versions = r.get("affected_versions") or "See technical description"
+    types = r.get("vuln_types") or "Vulnerability"
+    desc = r.get("description") or "No description provided."
+
+    cve_guide = get_cve_exploit_guide(cve_id)
+
+    card = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+    card.add_row("[bold cyan]Service & Product:[/bold cyan]", f"[bold white]{service}[/bold white]")
+    card.add_row("[bold cyan]Vulnerable Versions:[/bold cyan]", f"[bold yellow]{versions}[/bold yellow]")
+    card.add_row("[bold cyan]Vulnerability Type:[/bold cyan]", f"[bold bright_magenta]{types.upper()}[/bold bright_magenta]")
+    card.add_row("[bold cyan]Severity & Score:[/bold cyan]", f"[{sev_style}] {sev_label} [/{sev_style}]  {score_meter}")
+    card.add_row("[bold cyan]Vulnerability Description:[/bold cyan]", desc)
+
+    items = [card]
+
+    if cve_guide:
+        if cve_guide.get("how_to"):
+            items.append(Text("\n🎯 How to Exploit / Reproduction Steps:", style="bold yellow"))
+            items.append(Text(cve_guide["how_to"], style="bright_green"))
+        if cve_guide.get("remediation"):
+            items.append(Text(f"\n🛡️ Remediation: {cve_guide['remediation']}", style="dim"))
+
+    refs = r.get("references") or []
+    if refs:
+        ref_text = " • ".join([f"[link={u}]{u}[/link]" for u in refs[:3]])
+        items.append(Text.from_markup(f"\n[bold cyan]Advisories & Links:[/bold cyan] {ref_text}"))
+
+    border_col = "bright_red" if sev_label in ("CRITICAL", "HIGH") else "cyan"
+    panel = Panel(
+        Group(*items),
+        title=f"🔥 [bold bright_cyan]{cve_id}[/bold bright_cyan] - Service Vulnerability Intelligence",
+        border_style=border_col,
+        expand=True
+    )
+    console.print(panel)
 
 def print_cve_table(results: list, total: int, query_desc: str):
     if not results:
@@ -90,7 +135,7 @@ def print_cve_table(results: list, total: int, query_desc: str):
         )
 
     console.print(table)
-    console.print("[dim]Tip: Use [bold cyan]vectra get <CVE-ID>[/bold cyan] for full vector metrics, affected versions, and exploit links.[/dim]\n")
+    console.print("[dim]Tip: Use [bold cyan]vectra get <CVE-ID>[/bold cyan] or [bold cyan]vectra search <query> -d[/bold cyan] for full vulnerability descriptions, affected versions, and exploit steps.[/dim]\n")
 
 def cmd_search(args):
     """Execute CVE search from CLI."""
@@ -124,7 +169,18 @@ def cmd_search(args):
             limit=args.limit
         )
 
-    print_cve_table(res["results"], res["total"], query_desc)
+    results = res["results"]
+    if not results:
+        console.print(f"[yellow]No CVEs found matching: {query_desc}[/yellow]")
+        return
+
+    # If results <= 3 or user asked for details, display full detailed vulnerability cards
+    if getattr(args, "details", False) or len(results) <= 3:
+        console.print(f"\n[bold green]⚡ VECTRA Vulnerability Breakdown ({len(results)} matches for {query_desc}):[/bold green]\n")
+        for r in results:
+            print_cve_card(r)
+    else:
+        print_cve_table(results, res["total"], query_desc)
 
 def cmd_get(args):
     """Show comprehensive details for a specific CVE."""
@@ -134,53 +190,10 @@ def cmd_get(args):
         console.print(f"[bold red]CVE not found in local database:[/bold red] {cve_id}")
         return
 
-    score = data.get("cvss_v3_score")
-    score_str = f"{score:.1f}" if score is not None else "N/A"
-    sev_style, sev_label = get_severity_style(data.get("cvss_v3_severity"), score)
-
-    # Header Panel
-    title = data.get("title") or "No title provided"
-    header_text = f"[bold bright_cyan]{data['cve_id']}[/bold bright_cyan] - {title}\n"
-    header_text += f"[bold]Status:[/bold] {data.get('state', 'PUBLISHED')}  │  "
-    header_text += f"[bold]Published:[/bold] {data.get('date_published', '-')}  │  "
-    header_text += f"[bold]Updated:[/bold] {data.get('date_updated', '-')}  │  "
-    header_text += f"[bold]Assigner:[/bold] {data.get('assigner', '-')}"
-    console.print(Panel(header_text, style="cyan", title="🔥 Vulnerability Intelligence", border_style="cyan", expand=True))
-
-    # Metrics Panel
-    metrics_table = Table(show_header=False, box=None, padding=(0, 2), expand=True)
-    metrics_table.add_row("[bold]CVSS v3.1 Score:[/bold]", f"[{sev_style}] {score_str} ({sev_label}) [/{sev_style}]")
-    if data.get("cvss_v3_vector"):
-        metrics_table.add_row("[bold]Vector String:[/bold]", f"[cyan]{data['cvss_v3_vector']}[/cyan]")
-    if data.get("cwe_ids"):
-        metrics_table.add_row("[bold]CWE Identifiers:[/bold]", f"[bold yellow]{data['cwe_ids']}[/bold yellow]")
-    if data.get("vuln_types"):
-        metrics_table.add_row("[bold]Classification:[/bold]", f"[bold bright_magenta]{data['vuln_types']}[/bold bright_magenta]")
-    console.print(Panel(metrics_table, title="Security Metrics & CVSS Vector", style="yellow", border_style="yellow", expand=True))
-
-    # Affected Packages
-    aff_text = ""
-    if data.get("affected_vendors"):
-        aff_text += f"[bold]Vendors:[/bold] {data['affected_vendors']}\n"
-    if data.get("affected_products"):
-        aff_text += f"[bold]Products:[/bold] {data['affected_products']}\n"
-    if data.get("affected_versions"):
-        aff_text += f"[bold]Affected Versions:[/bold] {data['affected_versions']}\n"
-    if aff_text:
-        console.print(Panel(aff_text.strip(), title="Affected Services & Software", style="green", border_style="green", expand=True))
-
-    # Description
-    desc = data.get("description") or "No description available."
-    console.print(Panel(desc, title="Technical Description", style="white", border_style="white", expand=True))
-
-    # References
-    refs = data.get("references", [])
-    if refs:
-        ref_text = "\n".join([f"• [link={u}]{u}[/link]" for u in refs])
-        console.print(Panel(ref_text, title="Verified References & Advisory URLs", style="blue", border_style="blue", expand=True))
+    print_cve_card(data)
 
 def cmd_gtfo(args):
-    """Search and display GTFOBins exploits with responsive formatting."""
+    """Search and display GTFOBins exploits with rich descriptions, versions, and execution guides."""
     results = search_gtfobins(query=args.binary or "", function_type=args.type, limit=args.limit)
     if not results:
         console.print(f"[yellow]No GTFOBins exploits found for '{args.binary or ''}' (type: {args.type or 'any'})[/yellow]")
@@ -188,23 +201,42 @@ def cmd_gtfo(args):
 
     console.print(f"\n[bold green]⚡ GTFOBins Exploitation Vectors ({len(results)} found)[/bold green]\n")
     for r in results:
-        func_badge = f"[bold white on red] {r['function'].upper()} [/bold white on red]"
-        bin_header = f"[bold bright_cyan]{r['binary']}[/bold bright_cyan]  {func_badge}"
+        b_name = r["binary"]
+        f_name = r["function"]
+        code_str = r.get("code", "")
+
+        guide = get_gtfo_guide(b_name, f_name, code_str)
+        func_badge = f"[bold white on red] {f_name.upper()} [/bold white on red]"
+        bin_header = f"[bold bright_cyan]{b_name}[/bold bright_cyan]  {func_badge}  [dim]• {guide['service_name']}[/dim]"
+
+        body_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+        body_table.add_row("[bold cyan]Tool / Service Name:[/bold cyan]", f"[bold white]{guide['service_name']}[/bold white]")
+        body_table.add_row("[bold cyan]Vulnerable Versions / Scope:[/bold cyan]", f"[bold yellow]{guide['versions']}[/bold yellow]")
         
-        if r.get("code"):
-            code_syn = Syntax(r["code"], "bash", theme="monokai", line_numbers=False, word_wrap=True)
-            desc_text = f"[dim]{r['description']}[/dim]\n" if r.get("description") else ""
-            border_col = "bright_red" if r['function'] in ('sudo', 'suid') else "cyan"
-            console.print(Panel(
-                code_syn,
-                title=bin_header,
-                subtitle=f"[link={r.get('url')}]{r.get('url')}[/link]",
-                style="cyan",
-                border_style=border_col,
-                expand=True
-            ))
-        else:
-            console.print(Panel(r.get("description", "No code snippet"), title=bin_header, style="cyan", border_style="cyan", expand=True))
+        # Description / Mechanism
+        exploit_desc = r.get("description")
+        if not exploit_desc or exploit_desc == f"[{f_name.upper()}]":
+            exploit_desc = guide["mechanism"]
+        body_table.add_row("[bold cyan]Exploit Mechanism:[/bold cyan]", exploit_desc)
+        
+        # Step-by-step How to execute
+        body_table.add_row("[bold cyan]How to Execute:[/bold cyan]", f"[bright_green]{guide['how_to']}[/bright_green]")
+
+        elements = [body_table]
+        if code_str:
+            code_syn = Syntax(code_str, "bash", theme="monokai", line_numbers=False, word_wrap=True)
+            elements.append(Text("\n⚡ Command Payload:", style="bold cyan"))
+            elements.append(code_syn)
+
+        border_col = "bright_red" if f_name in ("sudo", "suid") else "cyan"
+        console.print(Panel(
+            Group(*elements),
+            title=bin_header,
+            subtitle=f"[link={r.get('url')}]{r.get('url')}[/link]",
+            style="cyan",
+            border_style=border_col,
+            expand=True
+        ))
 
 def cmd_gtfo_list(args):
     """List GTFOBins categories and binary counts."""
@@ -347,6 +379,7 @@ Examples:
     p_search.add_argument("--year", "-y", type=int, help="Filter by year (e.g. 2024)")
     p_search.add_argument("--cwe", help="Filter by CWE ID (e.g. CWE-89)")
     p_search.add_argument("--limit", "-n", type=int, default=25, help="Max results (default: 25)")
+    p_search.add_argument("--details", "-d", action="store_true", help="Show full vulnerability card and exploit walkthrough")
     p_search.set_defaults(func=cmd_search)
 
     # get
