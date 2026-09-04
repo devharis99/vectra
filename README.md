@@ -1,6 +1,20 @@
-# ⚡ VECTRA: Offline CVE & GTFOBins Intelligence Search Engine
+<div align="center">
 
-**VECTRA** is a fast, offline-capable terminal vulnerability and exploitation search engine designed for penetration testers, security researchers, and CTF players.
+# ⚡ VECTRA
+### High-Performance Offline CVE & GTFOBins Intelligence Search Engine
+
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg?logo=python&logoColor=white)](https://python.org)
+[![SQLite](https://img.shields.io/badge/Search%20Engine-SQLite%20FTS5%20BM25-003B57.svg?logo=sqlite&logoColor=white)](https://sqlite.org/fts5.html)
+[![CVE Records](https://img.shields.io/badge/CVEs%20Indexed-25%2C000%2B-red.svg?logo=security&logoColor=white)](https://www.cve.org)
+[![GTFOBins](https://img.shields.io/badge/GTFOBins-3%2C608%20Payloads-brightgreen.svg?logo=linux&logoColor=white)](https://gtfobins.github.io)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com)
+[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+
+<br/>
+
+<img src="assets/vectra_hero.png" alt="Vectra Terminal Intelligence Banner" width="850"/>
+
+<br/>
 
 ```
 ██▒   █▓▓█████  ▄████▄  ████████▓ ██▀███   ▄▄▄      
@@ -15,83 +29,203 @@
      ░          ░                                    
 ```
 
-## Features
+**VECTRA** is an offline-first terminal vulnerability research and exploitation engine built for penetration testers, security analysts, red teamers, and CTF players.
 
-- **Blazingly Fast SQLite FTS5**: Sub-millisecond BM25 ranking across **25,000+ indexed CVEs** and official historical records.
-- **Service & Version Matching**: Direct search by service and version (e.g. `apache 2.4.49`, `openssh 8.2p1`, `vsftpd 2.3.4`).
-- **Vulnerability Category Filtering**: Filter by `rce`, `privesc`, `sqli`, `auth`, `lfi`, `ssrf`, `dos`, `xss`.
-- **GTFOBins Exploit Payloads**: **3,608 privilege escalation payloads** across **458 Unix binaries** (Sudo, SUID, Shell, Reverse Shell, File Read/Write).
-- **Interactive Terminal REPL**: Full-color cyber UI with tab-completion and responsive code rendering.
-- **Docker Support**: Self-contained CLI and REST API container configurations.
+</div>
 
 ---
 
-## Quick Start
+## 📸 Terminal Interface Preview
 
-### Global Terminal Usage
+<div align="center">
+  <img src="assets/terminal_preview.png" alt="Vectra Interactive Red Cyberpunk Terminal" width="780"/>
+</div>
+
+---
+
+## ⚡ Core Capabilities
+
+- **🚀 Sub-Millisecond Search**: Powered by SQLite FTS5 with BM25 ranking across descriptions, titles, affected products, software versions, and CWEs.
+- **📦 Pre-Loaded & Offline**: Over **25,000+ real CVE records** and **3,608 GTFOBins exploitation payloads** indexed directly on your local machine.
+- **🎯 Service & Version Matching**: Direct, fuzzy, and structured queries by software name and version (e.g. `apache 2.4.49`, `openssh 8.2p1`, `vsftpd 2.3.4`).
+- **🛡️ Vulnerability Classification**: Instant filtering by vulnerability category (`rce`, `privesc`, `sqli`, `lfi`, `auth-bypass`, `memory-corruption`, `ssrf`, `dos`).
+- **⚔️ GTFOBins Integration**: Complete offline database of Unix binaries with ready-to-run bypass commands for **Sudo**, **SUID**, **Capabilities**, **Interactive Shells**, **Reverse Shells**, and **File Read/Write**.
+- **🎨 Responsive Cyberpunk Terminal**: Visual CVSS heat-meters (`[██████████] 10.0 CRITICAL`), adaptive word-wrapping, syntax highlighting, and tab-autocompletion.
+- **🐳 Docker Ready**: Zero-configuration container support with persistent volume caching.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Installation
+
+Clone the repository and install into your user environment:
+
 ```bash
-# Launch interactive red terminal shell
+git clone https://github.com/addisabrham36-boop/vectra.git
+cd vectra
+
+# Install dependencies and link executable globally
+pip install -e .
+```
+
+You can now run `vectra` from **any directory** in your terminal!
+
+---
+
+### 2. Launching the Interactive Shell
+
+Simply type:
+
+```bash
 vectra
+```
 
-# Search CVEs by software and version
-vectra search "apache 2.4.49"
-vectra search --type rce
+Inside the interactive console:
 
-# GTFOBins exploits
-vectra gtfo find -t sudo
-vectra gtfo vim -t suid
-
-# Deep dive into a CVE
-vectra get CVE-2021-44228
-
-# Display database metrics
-vectra stats
+```text
+⚡ vectra❯ search apache 2.4.49
+⚡ vectra❯ rce tomcat
+⚡ vectra❯ privesc kernel
+⚡ vectra❯ sudo vim
+⚡ vectra❯ suid bash
+⚡ vectra❯ get CVE-2021-44228
+⚡ vectra❯ stats
 ```
 
 ---
 
-## Interactive Shell Commands
+## 📖 Command Reference Cheat Sheet
 
-Inside `vectra`, use any of the quick shortcuts:
-
-| Command | What it Does | Example |
+| Command / Shortcut | What it Does | Example |
 | :--- | :--- | :--- |
-| `search <query>` / `s <query>` | Search CVEs by software or version | `search apache 2.4.49` |
-| `<query>` | Direct search without typing 'search' | `openssh 8.2` |
-| `rce <software>` | Filter for Remote Code Execution | `rce tomcat` |
-| `privesc <software>` | Filter for Privilege Escalation / LPE | `privesc kernel` |
-| `sqli <software>` | Filter for SQL Injection | `sqli wordpress` |
-| `auth <software>` | Filter for Authentication Bypass | `auth pulse` |
-| `lfi <software>` | Filter for Path Traversal / File Inclusion | `lfi webmin` |
-| `get <CVE-ID>` | Deep dive into CVE metrics & patch links | `get CVE-2021-44228` |
-| `gtfo <binary> [type]` | Lookup Unix bypass & exploitation payloads | `gtfo find sudo` |
-| `sudo <binary>` | Sudo root privilege escalation payload | `sudo vim` |
-| `suid <binary>` | SUID root breakout payload | `suid bash` |
-| `shell <binary>` | Interactive shell breakout payload | `shell find` |
-| `rev <binary>` | Reverse shell payload | `rev nc` |
-| `list [cves\|gtfo\|stats]` | Browse CVEs, GTFOBins index, or metrics | `list gtfo` |
-| `stats` | Show severity breakdown & category totals | `stats` |
-| `download` / `sync` | Sync official global CVE archive | `sync` |
-| `help` | Show command cheat sheet | `help` |
-| `clear` / `exit` | Clear screen or quit Vectra | `exit` |
+| **`search <query>` / `s <query>`** | Search CVEs by software, version, or keywords | `search apache 2.4.49` |
+| **`<query>`** | Direct search without typing 'search' | `openssh 8.2` |
+| **`rce <software>`** | Filter for Remote Code Execution vulnerabilities | `rce tomcat` |
+| **`privesc <software>`** | Filter for Privilege Escalation / LPE vulnerabilities | `privesc kernel` |
+| **`sqli <software>`** | Filter for SQL Injection vulnerabilities | `sqli wordpress` |
+| **`auth <software>`** | Filter for Authentication Bypass vulnerabilities | `auth pulse` |
+| **`lfi <software>`** | Filter for Path Traversal / File Inclusion vulnerabilities | `lfi webmin` |
+| **`get <CVE-ID>`** | Deep dive into CVE metrics, CVSS vector & advisory links | `get CVE-2021-44228` |
+| **`gtfo <binary> [type]`** | Lookup Unix bypass & exploitation payloads | `gtfo find sudo` |
+| **`sudo <binary>`** | Quick Sudo root privilege escalation payload | `sudo vim` |
+| **`suid <binary>`** | Quick SUID root breakout payload | `suid bash` |
+| **`shell <binary>`** | Payload to spawn an interactive shell | `shell find` |
+| **`rev <binary>`** | Payload for reverse shell connection | `rev nc` |
+| **`list [cves\|gtfo\|stats]`** | Browse CVE records, GTFOBins payload index, or metrics | `list gtfo` |
+| **`stats`** | Show severity breakdown & category totals | `stats` |
+| **`download / sync`** | Download & sync official global CVE archive (386,000+ CVEs) | `sync` |
+| **`help`** | Display command cheat sheet and usage guide | `help` |
+| **`clear / exit`** | Clear terminal screen or terminate Vectra | `exit` |
 
 ---
 
-## Docker Setup
+## 💻 Direct CLI Usage (Non-Interactive)
 
-### Run CLI via Docker:
+You can run any command directly from your shell scripts or terminal:
+
+### Search by Service & Version:
+```bash
+vectra search "apache 2.4.49"
+vectra search "vsftpd 2.3.4"
+vectra search "seaweedfs" --type privesc
+```
+
+### Search by Vulnerability Type:
+```bash
+vectra search --type rce --severity CRITICAL
+vectra search "sudo" --type privesc
+vectra search --type sqli
+```
+
+### GTFOBins Privilege Escalation Payloads:
+```bash
+# Sudo root command execution for 'vim'
+vectra gtfo vim -t sudo
+
+# SUID exploitation for 'find'
+vectra gtfo find -t suid
+
+# Reverse shell for 'bash'
+vectra gtfo bash -t reverse-shell
+
+# List all exploit categories
+vectra gtfo-list
+```
+
+### Inspect Technical Details of a CVE:
+```bash
+vectra get CVE-2021-44228
+vectra get CVE-2024-6387
+vectra get CVE-2022-0847
+```
+
+---
+
+## 🐳 Docker Deployment
+
+Run Vectra in completely isolated Docker containers with persistent caching:
+
+### Interactive Terminal via Docker:
 ```bash
 docker compose run --rm vectra-cli
 ```
 
-### Run REST API Service:
+### REST API Service:
 ```bash
 docker compose up -d vectra-api
-# API available at http://127.0.0.1:8000
+# REST API endpoints available at http://127.0.0.1:8000
+# OpenAPI Docs: http://127.0.0.1:8000/docs
 ```
 
 ---
 
-## License & Attribution
+## 🏛️ Architecture & Offline Storage
 
-Built with official datasets from `CVEProject/cvelistV5` and `GTFOBins/GTFOBins.github.io`.
+```
+                             ┌───────────────────────────────────┐
+                             │  Official CVEProject / GTFOBins   │
+                             │  - 386,000+ Raw JSON 5.0 Records  │
+                             │  - 3,600+ Unix Exploitation YAMLs │
+                             └─────────────────┬─────────────────┘
+                                               │
+                                               ▼
+                             ┌───────────────────────────────────┐
+                             │     Vectra Stream Parser & Ingest │
+                             │  - In-Memory Zip Stream Parsing   │
+                             │  - Zero Disk Waste Ingestion      │
+                             └─────────────────┬─────────────────┘
+                                               │
+                                               ▼
+                             ┌───────────────────────────────────┐
+                             │    Local SQLite FTS5 Database     │
+                             │  - ~/.local/share/vectra/cves.db  │
+                             │  - BM25 Porter-Stemmed FTS Index  │
+                             │  - Sub-Millisecond Query Latency  │
+                             └─────────────────┬─────────────────┘
+                                               │
+                     ┌─────────────────────────┴─────────────────────────┐
+                     ▼                                                   ▼
+      ┌─────────────────────────────┐                     ┌─────────────────────────────┐
+      │   Vectra Interactive REPL   │                     │      FastAPI REST Server    │
+      │   - Cyberpunk Red Terminal  │                     │   - GET /api/search         │
+      │   - Instant Fast Shortcuts  │                     │   - GET /api/cve/{id}       │
+      │   - Responsive Code Blocks  │                     │   - GET /api/gtfo           │
+      └─────────────────────────────┘                     └─────────────────────────────┘
+```
+
+- **Local Storage Path**: `~/.local/share/vectra/cves.db`
+- **Environment Variable**: `VECTRA_DATA_DIR=/custom/path`
+
+---
+
+## 🛡️ License & Acknowledgements
+
+- **License**: Released under the [MIT License](LICENSE).
+- **Data Sources**:
+  - [CVEProject / cvelistV5](https://github.com/CVEProject/cvelistV5) (Official MITRE / CVE List v5)
+  - [GTFOBins](https://gtfobins.github.io) (Curated Unix Binaries Privilege Escalation Project)
+
+<div align="center">
+  <b>Built for security professionals, ethical hackers, and CTF champions.</b>
+</div>
