@@ -4,6 +4,26 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from vectra.config import DB_PATH
 
+_SCHEMA_MIGRATED = False
+
+def ensure_schema(conn: sqlite3.Connection):
+    global _SCHEMA_MIGRATED
+    if _SCHEMA_MIGRATED:
+        return
+    try:
+        cur = conn.execute("PRAGMA table_info(gtfobins);")
+        cols = [r["name"] for r in cur.fetchall()]
+        if cols and "date_added" not in cols:
+            conn.execute("ALTER TABLE gtfobins ADD COLUMN date_added TEXT;")
+        # Backfill date_added for existing entries if empty
+        meta_sync = conn.execute("SELECT value FROM metadata WHERE key = 'last_sync'").fetchone()
+        sync_date_str = (meta_sync["value"][:10]) if meta_sync and meta_sync["value"] else "2026-09-04"
+        conn.execute("UPDATE gtfobins SET date_added = ? WHERE date_added IS NULL OR date_added = '';", (sync_date_str,))
+        conn.commit()
+    except Exception:
+        pass
+    _SCHEMA_MIGRATED = True
+
 def get_db_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -11,6 +31,7 @@ def get_db_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
+    ensure_schema(conn)
     return conn
 
 def init_db(db_path: Optional[Path] = None):
@@ -67,9 +88,15 @@ def init_db(db_path: Optional[Path] = None):
                 function TEXT,
                 description TEXT,
                 code TEXT,
-                url TEXT
+                url TEXT,
+                date_added TEXT
             );
         """)
+        # Migrate: add date_added column if upgrading from older schema
+        try:
+            conn.execute("ALTER TABLE gtfobins ADD COLUMN date_added TEXT;")
+        except Exception:
+            pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_gtfo_binary ON gtfobins(binary);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_gtfo_function ON gtfobins(function);")
 
@@ -155,15 +182,18 @@ def save_cves_batch(conn: sqlite3.Connection, cve_records: List[Dict[str, Any]])
                 r["vuln_types"] or "",
             ))
 
-def save_gtfobins_batch(conn: sqlite3.Connection, entries: List[Dict[str, Any]]):
+def save_gtfobins_batch(conn: sqlite3.Connection, entries: List[Dict[str, Any]], sync_date: str = ""):
+    import time
+    if not sync_date:
+        sync_date = time.strftime("%Y-%m-%d", time.gmtime())
     with conn:
         conn.execute("DELETE FROM gtfobins;")
         conn.execute("DELETE FROM gtfobins_fts;")
         for entry in entries:
             conn.execute("""
-                INSERT INTO gtfobins (binary, function, description, code, url)
-                VALUES (?, ?, ?, ?, ?);
-            """, (entry["binary"], entry["function"], entry.get("description", ""), entry.get("code", ""), entry.get("url", "")))
+                INSERT INTO gtfobins (binary, function, description, code, url, date_added)
+                VALUES (?, ?, ?, ?, ?, ?);
+            """, (entry["binary"], entry["function"], entry.get("description", ""), entry.get("code", ""), entry.get("url", ""), sync_date))
             conn.execute("""
                 INSERT INTO gtfobins_fts (binary, function, description, code)
                 VALUES (?, ?, ?, ?);

@@ -235,9 +235,17 @@ def get_database_stats(conn: Optional[sqlite3.Connection] = None) -> Dict[str, A
                 types_count[t_clean] = types_count.get(t_clean, 0) + 1
     top_vuln_types = dict(sorted(types_count.items(), key=lambda x: x[1], reverse=True)[:10])
 
-    # Recent sync time
+    # Recent sync time & release tag
     meta_sync = conn.execute("SELECT value FROM metadata WHERE key = 'last_sync'").fetchone()
     last_sync = meta_sync["value"] if meta_sync else "Never"
+    meta_tag = conn.execute("SELECT value FROM metadata WHERE key = 'release_tag'").fetchone()
+    release_tag = meta_tag["value"] if meta_tag else None
+    if not release_tag:
+        meta_src = conn.execute("SELECT value FROM metadata WHERE key = 'source_archive'").fetchone()
+        if meta_src and meta_src["value"]:
+            m = re.search(r"cve_[0-9_\-a-zA-Z]+", meta_src["value"])
+            if m:
+                release_tag = m.group(0)
 
     if close_conn:
         conn.close()
@@ -249,4 +257,5 @@ def get_database_stats(conn: Optional[sqlite3.Connection] = None) -> Dict[str, A
         "severity_distribution": severity_dist,
         "top_vulnerability_types": top_vuln_types,
         "last_sync": last_sync,
+        "release_tag": release_tag or "Unknown",
     }

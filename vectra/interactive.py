@@ -85,7 +85,23 @@ def get_completer():
         "dos": None,
         "stats": None,
         "sync-gtfo": None,
-        "download": None,
+        "update": {
+            "--check": None,
+            "-c": None,
+            "--delta": None,
+            "-d": None,
+            "--force": None,
+            "--gtfo-only": None,
+        },
+        "download": {
+            "--check": None,
+            "-c": None,
+            "--delta": None,
+            "-d": None,
+            "--force": None,
+            "--gtfo-only": None,
+        },
+        "sync": None,
         "help": None,
         "exit": None,
         "quit": None,
@@ -187,9 +203,9 @@ def show_help_panel():
         "stats"
     )
     table.add_row(
-        "download / sync",
-        "Download & sync official global CVE archive",
-        "sync"
+        "update / download",
+        "Check & sync CVE updates (--check, --delta, or full)",
+        "update --check"
     )
     table.add_row(
         "clear / exit",
@@ -386,12 +402,14 @@ def run_interactive_repl():
                     count = download_and_sync_gtfobins()
                 console.print(f"[green]✓ Successfully synced {count:,} GTFOBins exploitation methods![/green]")
                 completer = get_completer()
-            elif cmd in ("sync", "download"):
+            elif cmd in ("sync", "download", "update", "up"):
                 from vectra.cli import cmd_download
                 class DummyDL:
-                    force = False
+                    check = any(arg in ("--check", "-c", "check") for arg in cmd_args)
+                    delta = any(arg in ("--delta", "-d", "delta") for arg in cmd_args)
+                    force = any(arg in ("--force", "-f", "force") for arg in cmd_args)
                     limit = None
-                    gtfo_only = False
+                    gtfo_only = any(arg in ("--gtfo-only", "gtfo") for arg in cmd_args)
                 cmd_download(DummyDL())
             elif cmd.startswith("cve-"):
                 class DummyArgs:

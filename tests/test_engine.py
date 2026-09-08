@@ -102,7 +102,10 @@ def test_cve_ingestion_and_search():
         # Test search by service and version
         res = search_cves(query="apache 2.4.49", conn=conn)
         assert res["total"] == 1
-        assert res["results"][0]["cve_id"] == "CVE-2021-41773"
+        record = res["results"][0]
+        assert record["cve_id"] == "CVE-2021-41773"
+        assert record["date_published"] == "2021-10-05T00:00:00.000Z"
+        assert "2.4.49" in record["affected_versions"]
 
         # Test search by vuln type
         res_rce = search_cves(vuln_type="rce", conn=conn)
@@ -114,9 +117,45 @@ def test_cve_ingestion_and_search():
 
         conn.close()
 
+def test_date_and_version_formatting():
+    from vectra.cli import format_date, format_version_specs
+    # Test date formatting
+    assert format_date("2021-10-05T00:00:00.000Z") == "2021-10-05"
+    assert format_date("2024-05-14") == "2024-05-14"
+    assert format_date(None) == "N/A"
+    assert format_date("") == "N/A"
+
+    # Test version formatting
+    sample_rec = {
+        "version_details": [
+            {"version": "2.4.49", "status": "affected", "lessThan": "2.4.51"},
+            {"version": "2.4.50", "status": "affected"}
+        ]
+    }
+    ver_str = format_version_specs(sample_rec)
+    assert ">= 2.4.49, < 2.4.51" in ver_str
+    assert "= 2.4.50" in ver_str
+
+def test_gtfobins_date_tracking():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_db = Path(tmpdir) / "test.db"
+        init_db(test_db)
+        conn = get_db_connection(test_db)
+
+        entries = [
+            {"binary": "whoami", "function": "command", "description": "print user", "code": "whoami", "url": "https://gtfobins.github.io/gtfobins/whoami/"}
+        ]
+        save_gtfobins_batch(conn, entries, sync_date="2026-09-08")
+        res = search_gtfobins(query="whoami", conn=conn)
+        assert len(res) == 1
+        assert res[0]["date_added"] == "2026-09-08"
+        conn.close()
+
 if __name__ == "__main__":
     test_vuln_classifier()
     test_service_and_version_extraction()
     test_gtfobins_search()
     test_cve_ingestion_and_search()
+    test_date_and_version_formatting()
+    test_gtfobins_date_tracking()
     print("All core engine unit tests passed successfully!")

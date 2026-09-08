@@ -16,20 +16,19 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
     import io
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as z:
         for filename in z.namelist():
-            if filename.endswith(".md") and "_gtfobins/" in filename:
-                base_name = Path(filename).stem
+            if "/_gtfobins/" in filename and not filename.endswith("/"):
+                base_name = Path(filename).name
                 try:
-                    content = z.read(filename).decode("utf-8")
-                    match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL | re.MULTILINE)
-                    if match:
-                        yaml_text = match.group(1)
-                        data = yaml.safe_load(yaml_text)
-                        if isinstance(data, dict) and "functions" in data:
-                            raw_bins[base_name] = data["functions"]
+                    content = z.read(filename).decode("utf-8", errors="ignore")
+                    data = yaml.safe_load(content)
+                    if isinstance(data, dict) and isinstance(data.get("functions"), dict):
+                        raw_bins[base_name] = data["functions"]
                 except Exception:
                     continue
 
     for binary_name, functions in raw_bins.items():
+        if not isinstance(functions, dict):
+            continue
         url = f"https://gtfobins.github.io/gtfobins/{binary_name}/"
         for func_name, code_blocks in functions.items():
             if not isinstance(code_blocks, list):
@@ -170,7 +169,7 @@ def search_gtfobins(
         conn = get_db_connection()
         close_conn = True
 
-    sql_parts = ["SELECT id, binary, function, description, code, url FROM gtfobins WHERE 1=1"]
+    sql_parts = ["SELECT id, binary, function, description, code, url, date_added FROM gtfobins WHERE 1=1"]
     params = []
 
     if query:
