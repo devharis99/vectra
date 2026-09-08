@@ -1,19 +1,80 @@
 import re
-import yaml
 import zipfile
 import sqlite3
 import urllib.request
+import urllib.error
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from vectra.config import GTFOBINS_REPO_ZIP, DEFAULT_DATA_DIR
-from vectra.db import get_db_connection, init_db, save_gtfobins_batch
+
+def _get_config():
+    from vectra.config import GTFOBINS_REPO_ZIP, DEFAULT_DATA_DIR
+    return GTFOBINS_REPO_ZIP, DEFAULT_DATA_DIR
+
+def _get_db():
+    from vectra.db import get_db_connection, init_db, save_gtfobins_batch, set_metadata, get_metadata
+    return get_db_connection, init_db, save_gtfobins_batch, set_metadata, get_metadata
+
+def check_gtfobins_updates(conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    """Check if GTFOBins has been updated upstream using HTTP ETag/Last-Modified headers.
+    
+    Returns a dict with: has_updates, current_etag, remote_etag, last_sync, error
+    """
+    GTFOBINS_REPO_ZIP, _ = _get_config()
+    get_db_connection, _, _, set_metadata, get_metadata = _get_db()
+
+    close_conn = False
+    if conn is None:
+        conn = get_db_connection()
+        close_conn = True
+
+    current_etag = get_metadata(conn, "gtfobins_etag") or ""
+    last_sync = get_metadata(conn, "gtfobins_last_sync") or "Never"
+    total_entries = conn.execute("SELECT COUNT(*) as c FROM gtfobins").fetchone()["c"]
+
+    if close_conn:
+        conn.close()
+
+    # HEAD request to check ETag / Last-Modified without downloading
+    try:
+        req = urllib.request.Request(
+            GTFOBINS_REPO_ZIP,
+            method="HEAD",
+            headers={"User-Agent": "vectra-engine/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            remote_etag = resp.headers.get("ETag", "") or resp.headers.get("Last-Modified", "")
+    except Exception as e:
+        return {
+            "error": str(e),
+            "has_updates": False,
+            "current_etag": current_etag,
+            "remote_etag": "Unknown",
+            "last_sync": last_sync,
+            "total_entries": total_entries,
+        }
+
+    # If no ETag available, treat as stale if never synced
+    if not remote_etag:
+        has_updates = (total_entries == 0)
+    else:
+        has_updates = (total_entries == 0) or (not current_etag) or (current_etag != remote_etag)
+
+    return {
+        "error": None,
+        "has_updates": has_updates,
+        "current_etag": current_etag or "None (never synced)",
+        "remote_etag": remote_etag or "N/A",
+        "last_sync": last_sync,
+        "total_entries": total_entries,
+    }
 
 def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
     """Parse all GTFOBins markdown/yaml recipe files from the GitHub repository zip archive."""
+    import yaml
+    import io
     all_entries = []
     raw_bins = {}
 
-    import io
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as z:
         for filename in z.namelist():
             if "/_gtfobins/" in filename and not filename.endswith("/"):
@@ -50,7 +111,6 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
                 inherited_from = block.get("from")
                 contexts = block.get("contexts", {})
 
-                # Primary function entry
                 all_entries.append({
                     "binary": binary_name,
                     "function": func_name,
@@ -59,7 +119,6 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
                     "url": url,
                 })
 
-                # If this entry supports sudo/suid contexts, register context-specific entries
                 if isinstance(contexts, dict):
                     for ctx in ("sudo", "suid", "capabilities"):
                         if ctx in contexts:
@@ -77,7 +136,6 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
                                 "url": url,
                             })
 
-                # If inherited from another binary (e.g. vim inherits from vi), copy referenced functions
                 if inherited_from and inherited_from in raw_bins:
                     target_funcs = raw_bins[inherited_from]
                     for t_func, t_blocks in target_funcs.items():
@@ -125,13 +183,46 @@ def parse_gtfobins_archive(zip_bytes: bytes) -> List[Dict[str, Any]]:
 
     return list(unique_map.values())
 
-def download_and_sync_gtfobins(conn: Optional[sqlite3.Connection] = None, callback=None) -> int:
-    """Download GTFOBins repository zip, parse all binary exploitation recipes, and store in SQLite."""
+def download_and_sync_gtfobins(
+    conn: Optional[sqlite3.Connection] = None,
+    callback=None,
+    force: bool = False
+) -> int:
+    """Download GTFOBins repository zip, parse all binary exploitation recipes, and store in SQLite.
+    
+    Skips download if ETag matches upstream (already up-to-date), unless force=True.
+    """
+    import time
+    GTFOBINS_REPO_ZIP, _ = _get_config()
+    get_db_connection, init_db, save_gtfobins_batch, set_metadata, get_metadata = _get_db()
+
     init_db()
     close_conn = False
     if conn is None:
         conn = get_db_connection()
         close_conn = True
+
+    # ETag check — skip if already up-to-date
+    if not force:
+        current_etag = get_metadata(conn, "gtfobins_etag") or ""
+        total_entries = conn.execute("SELECT COUNT(*) as c FROM gtfobins").fetchone()["c"]
+        if current_etag and total_entries > 0:
+            try:
+                req = urllib.request.Request(
+                    GTFOBINS_REPO_ZIP,
+                    method="HEAD",
+                    headers={"User-Agent": "vectra-engine/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    remote_etag = resp.headers.get("ETag", "") or resp.headers.get("Last-Modified", "")
+                if remote_etag and remote_etag == current_etag:
+                    if callback:
+                        callback(f"GTFOBins already up-to-date ({total_entries:,} entries). Use --force to re-sync.")
+                    if close_conn:
+                        conn.close()
+                    return total_entries
+            except Exception:
+                pass  # On network error, proceed with download
 
     if callback:
         callback("Downloading GTFOBins repository archive...")
@@ -140,7 +231,11 @@ def download_and_sync_gtfobins(conn: Optional[sqlite3.Connection] = None, callba
         GTFOBINS_REPO_ZIP,
         headers={"User-Agent": "vectra-engine/1.0"}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+
+    # Capture ETag from the actual GET response
+    remote_etag = ""
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        remote_etag = resp.headers.get("ETag", "") or resp.headers.get("Last-Modified", "")
         zip_bytes = resp.read()
 
     if callback:
@@ -148,6 +243,12 @@ def download_and_sync_gtfobins(conn: Optional[sqlite3.Connection] = None, callba
 
     all_entries = parse_gtfobins_archive(zip_bytes)
     save_gtfobins_batch(conn, all_entries)
+
+    # Persist ETag and sync timestamp
+    sync_ts = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    if remote_etag:
+        set_metadata(conn, "gtfobins_etag", remote_etag)
+    set_metadata(conn, "gtfobins_last_sync", sync_ts)
 
     if callback:
         callback(f"Successfully indexed {len(all_entries)} GTFOBins functions across {len(set(e['binary'] for e in all_entries))} binaries!")
@@ -164,6 +265,7 @@ def search_gtfobins(
     limit: int = 50
 ) -> List[Dict[str, Any]]:
     """Search GTFOBins by binary name, function (sudo, suid, shell, etc.), with strict zero-duplicate guarantee."""
+    get_db_connection, _, _, _, _ = _get_db()
     close_conn = False
     if conn is None:
         conn = get_db_connection()
@@ -195,14 +297,13 @@ def search_gtfobins(
 
     query_str = " ".join(sql_parts)
     rows = conn.execute(query_str, params).fetchall()
-    
+
     # Strict deduplication: ensure no repeated command payload is returned
     seen = set()
     deduped_results = []
     for r in rows:
         row_dict = dict(r)
         code_norm = " ".join(row_dict["code"].split())
-        # Deduplicate strictly by binary and command payload
         dedup_key = (row_dict["binary"].lower(), code_norm)
         if dedup_key in seen:
             continue
@@ -218,6 +319,7 @@ def search_gtfobins(
 
 def list_gtfobins_functions(conn: Optional[sqlite3.Connection] = None) -> List[str]:
     """Get all unique GTFOBins function types."""
+    get_db_connection, _, _, _, _ = _get_db()
     close_conn = False
     if conn is None:
         conn = get_db_connection()

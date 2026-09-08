@@ -151,11 +151,44 @@ def test_gtfobins_date_tracking():
         assert res[0]["date_added"] == "2026-09-08"
         conn.close()
 
+def test_lazy_imports():
+    import sys
+    # Verify heavy modules are not imported at CLI module level
+    assert "prompt_toolkit" not in sys.modules, "prompt_toolkit should be lazily imported"
+    assert "yaml" not in sys.modules, "yaml should be lazily imported"
+    assert "rich" not in sys.modules, "rich should be lazily imported"
+
+def test_gtfobins_update_check():
+    from vectra.db import set_metadata, get_metadata
+    from vectra.gtfobins import check_gtfobins_updates
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_db = Path(tmpdir) / "test.db"
+        init_db(test_db)
+        conn = get_db_connection(test_db)
+
+        # On empty DB, has_updates should be True
+        status = check_gtfobins_updates(conn)
+        assert status["total_entries"] == 0
+        assert status["has_updates"] is True
+
+        # When ETag matches remote
+        if status.get("remote_etag"):
+            set_metadata(conn, "gtfobins_etag", status["remote_etag"])
+            save_gtfobins_batch(conn, [{"binary": "bash", "function": "shell", "description": "shell", "code": "bash", "url": "http://x"}])
+            status_after = check_gtfobins_updates(conn)
+            assert status_after["has_updates"] is False
+            assert status_after["total_entries"] == 1
+
+        conn.close()
+
 if __name__ == "__main__":
+    test_lazy_imports()
     test_vuln_classifier()
     test_service_and_version_extraction()
     test_gtfobins_search()
     test_cve_ingestion_and_search()
     test_date_and_version_formatting()
     test_gtfobins_date_tracking()
+    test_gtfobins_update_check()
     print("All core engine unit tests passed successfully!")

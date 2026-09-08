@@ -1,23 +1,29 @@
+"""
+vectra.cli — All heavy imports are LAZY (inside functions) so `vectra search foo`
+starts in ~300ms instead of ~3 seconds.
+"""
 import sys
 import argparse
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 
-from rich.console import Console, Group
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
-from rich.syntax import Syntax
-from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TransferSpeedColumn, DownloadColumn
 
-from vectra.config import DB_PATH, DEFAULT_DATA_DIR
-from vectra.db import init_db, get_db_connection
-from vectra.search import search_cves, get_cve_by_id, get_database_stats
-from vectra.gtfobins import search_gtfobins, download_and_sync_gtfobins, list_gtfobins_functions
-from vectra.downloader import fetch_latest_release_info, download_file_with_progress, ingest_cve_zip, check_cve_updates
-from vectra.exploit_guide import analyze_command_payload, get_cve_exploit_guide
+# ─── Lazy helpers ─────────────────────────────────────────────────────────────
 
-console = Console()
+def _console():
+    from rich.console import Console
+    return Console()
+
+_con = None
+def console():
+    global _con
+    if _con is None:
+        from rich.console import Console
+        _con = Console()
+    return _con
+
+
+# ─── Display helpers ──────────────────────────────────────────────────────────
 
 def format_date(date_val: Optional[str]) -> str:
     """Format ISO timestamp or date string into clean YYYY-MM-DD."""
@@ -32,9 +38,10 @@ def format_date(date_val: Optional[str]) -> str:
 
 def format_version_specs(r: Dict[str, Any]) -> str:
     """Generate precise, human-readable affected version specifications."""
+    from vectra.exploit_guide import get_cve_exploit_guide
     version_details = r.get("version_details") or []
     specs = []
-    
+
     if isinstance(version_details, list) and version_details:
         for item in version_details:
             if not isinstance(item, dict):
@@ -42,10 +49,10 @@ def format_version_specs(r: Dict[str, Any]) -> str:
             v = str(item.get("version", "")).strip()
             lt = str(item.get("lessThan", "")).strip()
             status = str(item.get("status", "")).lower()
-            
+
             if status == "unaffected":
                 continue
-                
+
             if lt:
                 if v and v.lower() not in ("0", "*", "n/a", "unspecified", "all"):
                     specs.append(f">= {v}, < {lt}")
@@ -53,7 +60,7 @@ def format_version_specs(r: Dict[str, Any]) -> str:
                     specs.append(f"< {lt}")
             elif v and v.lower() not in ("0", "*", "n/a", "unspecified", "all"):
                 specs.append(f"= {v}")
-                
+
         seen = set()
         deduped = []
         for s in specs:
@@ -105,11 +112,20 @@ def format_score_meter(score: Optional[float], severity: Optional[str]) -> str:
         meter_color = "yellow"
     else:
         meter_color = "green"
-    
     return f"[{meter_color}]{'█' * filled}[dim]{'░' * empty}[/dim] {score:.1f}[/{meter_color}]"
+
+
+# ─── CVE card / table ─────────────────────────────────────────────────────────
 
 def print_cve_card(r: Dict[str, Any]):
     """Print an enriched, detailed vulnerability card for a specific CVE."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.syntax import Syntax
+    from rich.console import Group
+    from vectra.exploit_guide import get_cve_exploit_guide
+
     cve_id = r["cve_id"]
     score = r.get("cvss_v3_score") or r.get("cvss_v2_score")
     score_meter = format_score_meter(score, r.get("cvss_v3_severity"))
@@ -160,11 +176,15 @@ def print_cve_card(r: Dict[str, Any]):
         border_style=border_col,
         expand=True
     )
-    console.print(panel)
+    console().print(panel)
 
 def print_cve_table(results: list, total: int, query_desc: str):
+    from rich.table import Table
     if not results:
-        console.print(f"[yellow]No CVEs found matching: {query_desc}[/yellow]")
+        console().print(f"[yellow]No CVEs found matching: {query_desc}[/yellow]")
+        console().print(
+            "[dim]Try a broader term, or run [bold cyan]update --delta[/bold cyan] to fetch the latest CVEs.[/dim]"
+        )
         return
 
     table = Table(
@@ -186,7 +206,7 @@ def print_cve_table(results: list, total: int, query_desc: str):
         score = r.get("cvss_v3_score") or r.get("cvss_v2_score")
         score_meter = format_score_meter(score, r.get("cvss_v3_severity"))
         sev_style, sev_label = get_severity_style(r.get("cvss_v3_severity"), score)
-        
+
         pub_date = format_date(r.get("date_published"))
         if pub_date == "N/A" and r.get("year"):
             pub_date = str(r.get("year"))
@@ -221,11 +241,19 @@ def print_cve_table(results: list, total: int, query_desc: str):
             snippet_clean
         )
 
-    console.print(table)
-    console.print("[dim]Tip: Use [bold cyan]vectra get <CVE-ID>[/bold cyan] or [bold cyan]vectra search <query> -d[/bold cyan] for full vulnerability descriptions, affected versions, and exploit steps.[/dim]\n")
+    console().print(table)
+    console().print(
+        "[dim]Tip: Use [bold cyan]vectra get <CVE-ID>[/bold cyan] or add [bold cyan]-d[/bold cyan] "
+        "to your search for full descriptions, affected versions, and exploit steps.[/dim]\n"
+    )
+
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
 
 def cmd_search(args):
     """Execute CVE search from CLI."""
+    from vectra.search import search_cves
+
     query_parts = []
     if args.query:
         query_parts.append(f"'{args.query}'")
@@ -242,7 +270,7 @@ def cmd_search(args):
 
     query_desc = " ".join(query_parts) if query_parts else "all"
 
-    with console.status("[bold cyan]Searching local vulnerability database...[/bold cyan]"):
+    with console().status("[bold cyan]Searching local vulnerability database...[/bold cyan]"):
         res = search_cves(
             query=args.query or "",
             service=args.service,
@@ -258,12 +286,14 @@ def cmd_search(args):
 
     results = res["results"]
     if not results:
-        console.print(f"[yellow]No CVEs found matching: {query_desc}[/yellow]")
+        console().print(f"[yellow]No CVEs found matching: {query_desc}[/yellow]")
+        console().print(
+            "[dim]Try a different keyword, or run [bold cyan]update --delta[/bold cyan] to fetch new CVEs.[/dim]"
+        )
         return
 
-    # If results <= 3 or user asked for details, display full detailed vulnerability cards
     if getattr(args, "details", False) or len(results) <= 3:
-        console.print(f"\n[bold green]⚡ VECTRA Vulnerability Breakdown ({len(results)} matches for {query_desc}):[/bold green]\n")
+        console().print(f"\n[bold green]⚡ VECTRA Vulnerability Breakdown ({len(results)} matches for {query_desc}):[/bold green]\n")
         for r in results:
             print_cve_card(r)
     else:
@@ -271,22 +301,49 @@ def cmd_search(args):
 
 def cmd_get(args):
     """Show comprehensive details for a specific CVE."""
+    from vectra.search import get_cve_by_id
     cve_id = args.cve_id.strip().upper()
     data = get_cve_by_id(cve_id)
     if not data:
-        console.print(f"[bold red]CVE not found in local database:[/bold red] {cve_id}")
+        console().print(f"[bold red]CVE not found in local database:[/bold red] {cve_id}")
+        console().print(
+            "[dim]If this is a recent CVE, run [bold cyan]vectra update --delta[/bold cyan] to fetch the latest.[/dim]"
+        )
         return
-
     print_cve_card(data)
 
 def cmd_gtfo(args):
     """Search and display GTFOBins exploits with rich descriptions, versions, and execution guides."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.syntax import Syntax
+    from rich.console import Group
+    from vectra.gtfobins import search_gtfobins, list_gtfobins_functions
+    from vectra.exploit_guide import analyze_command_payload
+    from vectra.search import get_database_stats
+
     results = search_gtfobins(query=args.binary or "", function_type=args.type, limit=args.limit)
     if not results:
-        console.print(f"[yellow]No GTFOBins exploits found for '{args.binary or ''}' (type: {args.type or 'any'})[/yellow]")
+        # Beginner-friendly empty state
+        stats = get_database_stats()
+        total = stats.get("total_gtfo_entries", 0)
+        if total == 0:
+            console().print(
+                "[yellow]GTFOBins database is empty.[/yellow]\n"
+                "[dim]Run [bold cyan]vectra update --gtfo-only[/bold cyan] to download GTFOBins exploitation data.[/dim]"
+            )
+        else:
+            funcs = list_gtfobins_functions()
+            sample_bins = ["bash", "find", "vim", "python", "perl", "awk", "curl", "nmap", "tar"]
+            console().print(
+                f"[yellow]No GTFOBins entries found for '{args.binary or ''}' (type: {args.type or 'any'})[/yellow]\n"
+                f"[dim]Try one of these: [bold cyan]{', '.join(sample_bins[:6])}[/bold cyan]\n"
+                f"Available types: [bold magenta]{', '.join(funcs[:8])}[/bold magenta][/dim]"
+            )
         return
 
-    console.print(f"\n[bold green]⚡ GTFOBins Exploitation Vectors ({len(results)} found)[/bold green]\n")
+    console().print(f"\n[bold green]⚡ GTFOBins Exploitation Vectors ({len(results)} found)[/bold green]\n")
     for r in results:
         b_name = r["binary"]
         f_name = r["function"]
@@ -299,16 +356,13 @@ def cmd_gtfo(args):
         body_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
         body_table.add_row("[bold cyan]Technique / Name:[/bold cyan]", f"[bold white]{guide['technique_name']}[/bold white]")
         body_table.add_row("[bold cyan]Version Scope / Constraints:[/bold cyan]", f"[bold yellow]{guide['version_scope']}[/bold yellow]")
-        
-        # Description / Mechanism
+
         exploit_desc = r.get("description")
         if not exploit_desc or exploit_desc == f"[{f_name.upper()}]":
             exploit_desc = guide["mechanism"]
         body_table.add_row("[bold cyan]Exploit Mechanism:[/bold cyan]", exploit_desc)
-        
-        # Step-by-step How to execute
         body_table.add_row("[bold cyan]How to Execute:[/bold cyan]", f"[bright_green]{guide['how_to']}[/bright_green]")
-        
+
         date_added = r.get("date_added") or "Indexed"
         body_table.add_row("[bold cyan]Database Sync / Added:[/bold cyan]", f"[bold white]{date_added}[/bold white]")
 
@@ -319,7 +373,7 @@ def cmd_gtfo(args):
             elements.append(code_syn)
 
         border_col = "bright_red" if f_name in ("sudo", "suid") else "cyan"
-        console.print(Panel(
+        console().print(Panel(
             Group(*elements),
             title=bin_header,
             subtitle=f"[link={r.get('url')}]{r.get('url')}[/link]",
@@ -330,24 +384,44 @@ def cmd_gtfo(args):
 
 def cmd_gtfo_list(args):
     """List GTFOBins categories and binary counts."""
+    from rich.panel import Panel
+    from vectra.gtfobins import list_gtfobins_functions
+    from vectra.search import get_database_stats
+
     funcs = list_gtfobins_functions()
     stats = get_database_stats()
-    console.print(Panel(
+    last_sync = stats.get("last_sync", "Never")
+    # Prefer the more specific GTFOBins sync timestamp if available
+    from vectra.db import get_db_connection, get_metadata
+    try:
+        conn = get_db_connection()
+        gtfo_sync = get_metadata(conn, "gtfobins_last_sync")
+        conn.close()
+        if gtfo_sync:
+            last_sync = gtfo_sync
+    except Exception:
+        pass
+
+    console().print(Panel(
         f"[bold]Total Payloads:[/bold] [bold yellow]{stats['total_gtfo_entries']:,}[/bold yellow] across [bold cyan]{stats['total_gtfo_binaries']:,}[/bold cyan] binaries\n"
-        f"[bold]Last Sync:[/bold] [dim]{stats.get('last_sync', 'Never')}[/dim]\n\n"
+        f"[bold]Last GTFOBins Sync:[/bold] [dim]{last_sync}[/dim]\n\n"
         f"[bold]Categories:[/bold] " + ", ".join([f"[bold magenta]{f}[/bold magenta]" for f in funcs]),
         title="⚡ GTFOBins Exploit Index", style="magenta", border_style="magenta", expand=True
     ))
 
 def cmd_stats(args):
     """Show database statistics."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from vectra.search import get_database_stats
+
     stats = get_database_stats()
     table = Table(title="⚡ VECTRA Intelligence Metrics", show_header=False, box=None, expand=True)
     table.add_row("[bold cyan]Total CVE Records:[/bold cyan]", f"[bold white]{stats['total_cves']:,}[/bold white]")
     table.add_row("[bold green]GTFOBins Payloads:[/bold green]", f"[bold yellow]{stats['total_gtfo_entries']:,}[/bold yellow] across [bold white]{stats['total_gtfo_binaries']:,}[/bold white] binaries")
     table.add_row("[bold yellow]Last Dataset Sync:[/bold yellow]", f"{stats['last_sync']}")
     table.add_row("[bold magenta]CVE Release Tag:[/bold magenta]", f"{stats.get('release_tag', 'N/A')}")
-    console.print(Panel(table, style="cyan", border_style="cyan", expand=True))
+    console().print(Panel(table, style="cyan", border_style="cyan", expand=True))
 
     if stats["severity_distribution"]:
         sev_table = Table(title="Severity Breakdown", show_header=True, header_style="bold yellow", expand=True)
@@ -356,7 +430,7 @@ def cmd_stats(args):
         for k, v in stats["severity_distribution"].items():
             style, _ = get_severity_style(k, None)
             sev_table.add_row(f"[{style}] {k} [/{style}]", f"{v:,}")
-        console.print(sev_table)
+        console().print(sev_table)
 
     if stats["top_vulnerability_types"]:
         vt_table = Table(title="Top Vulnerability Categories", show_header=True, header_style="bold magenta", expand=True)
@@ -364,57 +438,89 @@ def cmd_stats(args):
         vt_table.add_column("Count", justify="right")
         for k, v in stats["top_vulnerability_types"].items():
             vt_table.add_row(f"[bold magenta]{k}[/bold magenta]", f"{v:,}")
-        console.print(vt_table)
+        console().print(vt_table)
 
 def cmd_download(args):
     """Download, update, or check official CVE dataset and GTFOBins."""
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.console import Group
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, TransferSpeedColumn, DownloadColumn
+    from vectra.db import init_db
+    from vectra.downloader import fetch_latest_release_info, download_file_with_progress, ingest_cve_zip, check_cve_updates
+    from vectra.gtfobins import download_and_sync_gtfobins, check_gtfobins_updates
+    from vectra.config import DEFAULT_DATA_DIR
+
     init_db()
 
-    # If user ran with --check / -c
+    # ── --check: show status of both CVEs and GTFOBins ──
     if getattr(args, "check", False):
-        console.print("[bold cyan]=== VECTRA Intelligence Update Status Check ===[/bold cyan]\n")
-        with console.status("[cyan]Checking CVEProject/cvelistV5 upstream release...[/cyan]"):
-            status = check_cve_updates()
+        console().print("[bold cyan]=== VECTRA Intelligence Update Status Check ===[/bold cyan]\n")
 
-        if status.get("error"):
-            console.print(f"[red]Failed to check upstream updates:[/red] {status['error']}")
-            return
+        with console().status("[cyan]Checking CVE upstream release...[/cyan]"):
+            cve_status = check_cve_updates()
 
+        with console().status("[cyan]Checking GTFOBins upstream ETag...[/cyan]"):
+            gtfo_status = check_gtfobins_updates()
+
+        # CVE status table
         check_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        check_table.add_column("Key", style="bold cyan", width=28)
+        check_table.add_column("Key", style="bold cyan", width=30)
         check_table.add_column("Value", style="white")
 
-        check_table.add_row("Local Indexed CVEs:", f"[bold yellow]{status['total_cves']:,}[/bold yellow]")
-        check_table.add_row("Local Dataset Release Tag:", f"[bold white]{status['current_tag']}[/bold white]")
-        check_table.add_row("Last Dataset Sync:", f"[dim]{status['last_sync']}[/dim]")
+        if cve_status.get("error"):
+            check_table.add_row("⚠️  CVE Check Error:", f"[red]{cve_status['error']}[/red]")
+        else:
+            check_table.add_row("Local Indexed CVEs:", f"[bold yellow]{cve_status['total_cves']:,}[/bold yellow]")
+            check_table.add_row("Local CVE Release Tag:", f"[bold white]{cve_status['current_tag']}[/bold white]")
+            check_table.add_row("Last CVE Sync:", f"[dim]{cve_status['last_sync']}[/dim]")
+            check_table.add_row("", "")
+            check_table.add_row("Upstream CVE Release Tag:", f"[bold green]{cve_status['latest_tag']}[/bold green]")
+            check_table.add_row("Upstream Release Published:", f"[dim]{format_date(cve_status.get('published_at'))}[/dim]")
+            full_mb = cve_status.get("full_zip_size", 0) / (1024 * 1024)
+            delta_mb = cve_status.get("delta_zip_size", 0) / (1024 * 1024)
+            if delta_mb > 0:
+                check_table.add_row("Daily Delta Size:", f"[bright_yellow]{delta_mb:.1f} MB (Fast update)[/bright_yellow]")
+            if full_mb > 0:
+                check_table.add_row("Full Archive Size:", f"[white]{full_mb:.1f} MB (386,000+ records)[/white]")
+
         check_table.add_row("", "")
-        check_table.add_row("Upstream Latest Release Tag:", f"[bold green]{status['latest_tag']}[/bold green]")
-        check_table.add_row("Upstream Release Published:", f"[dim]{format_date(status.get('published_at'))}[/dim]")
-        
-        full_mb = status.get("full_zip_size", 0) / (1024 * 1024)
-        delta_mb = status.get("delta_zip_size", 0) / (1024 * 1024)
-        if delta_mb > 0:
-            check_table.add_row("Daily Delta Size:", f"[bright_yellow]{delta_mb:.1f} MB (Fast update)[/bright_yellow]")
-        if full_mb > 0:
-            check_table.add_row("Full Global Archive Size:", f"[white]{full_mb:.1f} MB (386,000+ records)[/white]")
+
+        # GTFOBins status
+        if gtfo_status.get("error"):
+            check_table.add_row("⚠️  GTFOBins Check Error:", f"[red]{gtfo_status['error']}[/red]")
+        else:
+            check_table.add_row("Local GTFOBins Entries:", f"[bold yellow]{gtfo_status['total_entries']:,}[/bold yellow]")
+            check_table.add_row("Last GTFOBins Sync:", f"[dim]{gtfo_status['last_sync']}[/dim]")
+            gtfo_upd = "[bold bright_yellow]⚡ Update available[/bold bright_yellow]" if gtfo_status["has_updates"] else "[bold green]✓ Up to date[/bold green]"
+            check_table.add_row("GTFOBins Status:", gtfo_upd)
 
         items = [check_table]
 
-        if status["has_updates"]:
+        cve_needs_update = not cve_status.get("error") and cve_status.get("has_updates", False)
+        gtfo_needs_update = not gtfo_status.get("error") and gtfo_status.get("has_updates", False)
+
+        if cve_needs_update or gtfo_needs_update:
+            parts = []
+            if cve_needs_update:
+                parts.append(
+                    "  • Fast CVE update:   [bold cyan]vectra update --delta[/bold cyan]\n"
+                    "  • Full CVE sync:      [bold cyan]vectra update[/bold cyan]"
+                )
+            if gtfo_needs_update:
+                parts.append("  • GTFOBins update:   [bold cyan]vectra update --gtfo-only[/bold cyan]")
             status_text = (
-                "\n[bold bright_yellow]⚡ UPDATES AVAILABLE![/bold bright_yellow] Newer CVE definitions have been published upstream.\n"
-                "[bold white]To update your database:[/bold white]\n"
-                "  • Fast Daily Update: [bold cyan]vectra update --delta[/bold cyan] (downloads latest daily changes)\n"
-                "  • Full Dataset Sync:  [bold cyan]vectra update[/bold cyan] (downloads & re-indexes entire archive)"
+                "\n[bold bright_yellow]⚡ UPDATES AVAILABLE![/bold bright_yellow] Run one of:\n"
+                + "\n".join(parts)
             )
             border_style = "bright_yellow"
         else:
-            status_text = "\n[bold green]✓ Local database is up to date with the latest CVEProject release![/bold green]"
+            status_text = "\n[bold green]✓ Everything is up to date![/bold green]"
             border_style = "green"
 
         items.append(Text.from_markup(status_text))
-
-        console.print(Panel(
+        console().print(Panel(
             Group(*items),
             title="⚡ VECTRA Database Status & Update Center",
             border_style=border_style,
@@ -422,31 +528,38 @@ def cmd_download(args):
         ))
         return
 
-    # 1. Sync GTFOBins
-    console.print("[bold cyan]=== Step 1: Syncing GTFOBins Exploitation Database ===[/bold cyan]")
-    with console.status("[cyan]Downloading & indexing GTFOBins recipes...[/cyan]"):
-        try:
-            count = download_and_sync_gtfobins()
-            console.print(f"[green]✓ Successfully indexed {count:,} GTFOBins exploitation methods![/green]\n")
-        except Exception as e:
-            console.print(f"[red]Failed to sync GTFOBins: {e}[/red]\n")
+    # ── GTFOBins sync (always runs unless --gtfo-only skips CVEs) ──
+    force = getattr(args, "force", False)
+    gtfo_only = getattr(args, "gtfo_only", False)
 
-    if getattr(args, "gtfo_only", False):
+    console().print("[bold cyan]=== Step 1: Syncing GTFOBins Exploitation Database ===[/bold cyan]")
+    with console().status("[cyan]Checking GTFOBins upstream for changes...[/cyan]"):
+        try:
+            status_msgs = []
+            count = download_and_sync_gtfobins(force=force, callback=lambda m: status_msgs.append(m))
+            if any("already up-to-date" in m for m in status_msgs):
+                console().print(f"[green]✓ GTFOBins: {count:,} exploitation methods indexed ([dim]already up-to-date[/dim]).[/green]\n")
+            else:
+                console().print(f"[green]✓ GTFOBins: {count:,} exploitation methods indexed![/green]\n")
+        except Exception as e:
+            console().print(f"[red]Failed to sync GTFOBins: {e}[/red]\n")
+
+    if gtfo_only:
         return
 
-    # 2. Ingest CVEs (Delta or Full)
+    # ── CVE sync ──
     is_delta = getattr(args, "delta", False)
     if is_delta:
-        console.print("[bold cyan]=== Step 2: Ingesting Daily Delta CVEs (Fast Update) ===[/bold cyan]")
+        console().print("[bold cyan]=== Step 2: Ingesting Daily Delta CVEs (Fast Update) ===[/bold cyan]")
     else:
-        console.print("[bold cyan]=== Step 2: Official Global CVE List v5 Ingestion ===[/bold cyan]")
+        console().print("[bold cyan]=== Step 2: Official Global CVE List v5 Ingestion ===[/bold cyan]")
 
-    with console.status("[cyan]Checking latest CVEProject/cvelistV5 release info...[/cyan]"):
+    with console().status("[cyan]Checking latest CVEProject/cvelistV5 release info...[/cyan]"):
         rel_info = fetch_latest_release_info()
 
     tag = rel_info.get("tag_name")
     if not tag:
-        console.print("[red]Could not determine latest CVEProject release tag.[/red]")
+        console().print("[red]Could not determine latest CVEProject release tag.[/red]")
         return
 
     if is_delta:
@@ -460,42 +573,40 @@ def cmd_download(args):
         dest_zip = DEFAULT_DATA_DIR / f"cvelist_{tag}.zip"
         mode_label = "Full global archive"
 
-    console.print(f"[bold]Target Release Tag:[/bold] {tag} ({mode_label})")
+    console().print(f"[bold]Target Release Tag:[/bold] {tag} ({mode_label})")
     if not zip_url:
-        console.print(f"[red]Could not determine download URL for {mode_label.lower()}.[/red]")
+        console().print(f"[red]Could not determine download URL for {mode_label.lower()}.[/red]")
         return
 
-    if not dest_zip.exists() or getattr(args, "force", False):
-        console.print(f"[cyan]Downloading {mode_label.lower()} ({zip_size/(1024*1024):.1f} MB)...[/cyan]")
-        
+    if not dest_zip.exists() or force:
+        console().print(f"[cyan]Downloading {mode_label.lower()} ({zip_size/(1024*1024):.1f} MB)...[/cyan]")
         with Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             DownloadColumn(),
             TransferSpeedColumn(),
             TimeRemainingColumn(),
-            console=console
+            console=console()
         ) as progress:
             task_id = progress.add_task(f"Downloading {mode_label}...", total=zip_size or 100)
-            
+
             def cb(downloaded, total, speed):
                 progress.update(task_id, completed=downloaded, total=total)
 
             download_file_with_progress(zip_url, dest_zip, progress_callback=cb)
-            console.print("[green]✓ Download complete![/green]")
+            console().print("[green]✓ Download complete![/green]")
     else:
-        console.print(f"[yellow]Using cached archive: {dest_zip.name}[/yellow]")
+        console().print(f"[yellow]Using cached archive: {dest_zip.name}[/yellow]")
 
-    # Ingest and index
-    console.print(f"[cyan]Indexing CVE JSON records directly into SQLite FTS5 database...[/cyan]")
+    console().print("[cyan]Indexing CVE JSON records directly into SQLite FTS5 database...[/cyan]")
     max_rec = args.limit if getattr(args, "limit", None) else None
-    
+
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("{task.completed}/{task.total} records"),
         TimeRemainingColumn(),
-        console=console
+        console=console()
     ) as progress:
         task_id = progress.add_task("Indexing CVEs...", total=1000)
 
@@ -505,14 +616,17 @@ def cmd_download(args):
         total_indexed = ingest_cve_zip(dest_zip, max_records=max_rec, progress_callback=index_cb, release_tag=tag)
 
     if is_delta:
-        console.print(f"\n[bold green]✓ Successfully updated {total_indexed:,} delta CVEs in local database![/bold green]")
+        console().print(f"\n[bold green]✓ Successfully updated {total_indexed:,} delta CVEs in local database![/bold green]")
     else:
-        console.print(f"\n[bold green]✓ Successfully indexed {total_indexed:,} CVEs into local database![/bold green]")
+        console().print(f"\n[bold green]✓ Successfully indexed {total_indexed:,} CVEs into local database![/bold green]")
 
 def cmd_interactive(args):
     """Launch interactive terminal REPL."""
     from vectra.interactive import run_interactive_repl
     run_interactive_repl()
+
+
+# ─── CLI entry point ──────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -530,6 +644,7 @@ Examples:
   vectra update --check             Check if new CVE releases are available upstream
   vectra update --delta             Quick update: fetch today's new & modified delta CVEs
   vectra update                     Download & sync full official CVE list (386,000+ records)
+  vectra update --gtfo-only         Re-sync GTFOBins exploitation database only
         """
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -572,9 +687,9 @@ Examples:
     # update / download
     for cmd_name, cmd_alias in [("update", ["up"]), ("download", ["sync"])]:
         p_up = subparsers.add_parser(cmd_name, aliases=cmd_alias, help="Update or download official CVEs and GTFOBins")
-        p_up.add_argument("--check", "-c", action="store_true", help="Check for new CVE updates without downloading")
+        p_up.add_argument("--check", "-c", action="store_true", help="Check for new CVE + GTFOBins updates without downloading")
         p_up.add_argument("--delta", "-d", action="store_true", help="Quick update: download and index only latest daily delta CVEs")
-        p_up.add_argument("--force", "-f", action="store_true", help="Force re-download even if archive exists")
+        p_up.add_argument("--force", "-f", action="store_true", help="Force re-download even if archive exists or GTFOBins ETag matches")
         p_up.add_argument("--limit", type=int, help="Limit number of CVEs to index")
         p_up.add_argument("--gtfo-only", action="store_true", help="Only sync GTFOBins database")
         p_up.set_defaults(func=cmd_download)
