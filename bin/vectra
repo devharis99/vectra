@@ -1,8 +1,25 @@
 #!/usr/bin/env bash
-PROJECT_DIR="/home/abrham/.gemini/antigravity/scratch/cve-search-engine"
-if [ -f "$PROJECT_DIR/.venv/bin/python3" ]; then
-    PYTHON="$PROJECT_DIR/.venv/bin/python3"
-else
-    PYTHON="python3"
+# Vectra CLI entrypoint launcher
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+CANDIDATES=(
+    "$SCRIPT_DIR"
+    "/home/abrham/projects/vectra"
+    "/home/abrham/projectss/vectra"
+    "/home/abrham/Projects/vectra"
+)
+
+for dir in "${CANDIDATES[@]}"; do
+    if [ -f "$dir/.venv/bin/python3" ]; then
+        exec "$dir/.venv/bin/python3" -m vectra.cli "$@"
+    fi
+done
+
+if command -v python3 &>/dev/null && python3 -c "import vectra" &>/dev/null; then
+    exec python3 -m vectra.cli "$@"
 fi
-exec "$PYTHON" -m vectra.cli "$@"
+
+echo "Error: Vectra virtual environment not found." >&2
+echo "Run: cd $SCRIPT_DIR && python3 -m venv .venv && source .venv/bin/activate && pip install -e ." >&2
+exit 1
